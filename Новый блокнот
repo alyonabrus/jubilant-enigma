@@ -1,0 +1,150 @@
+import random
+import math
+import numpy as np
+from typing import List, Tuple, Callable
+
+def softmax(logits: List[float]) -> List[float]:
+    """Стабильный softmax: вычитаем максимум, чтобы не было переполнения."""
+    max_logit = max(logits)
+    exps = [math.exp(l - max_logit) for l in logits]
+    sum_exps = sum(exps)
+    return [e / sum_exps for e in exps]
+
+def relu(x: float) -> float:
+    """Функция активации ReLU."""
+    return max(0, x)
+
+def relu_derivative(x: float) -> float:
+    """Производная ReLU."""
+    return 1 if x > 0 else 0
+
+def convolve(image: List[List[float]], kernel: List[List[float]]) -> List[List[float]]:
+    """Простая 2D свёртка (ядро 3x3)."""
+    h, w = len(image), len(image[0])
+    kh, kw = len(kernel), len(kernel[0])
+    output = []
+    for i in range(h - kh + 1):
+        row = []
+        for j in range(w - kw + 1):
+            val = sum(
+                image[i + ki][j + kj] * kernel[ki][kj]
+                for ki in range(kh) for kj in range(kw)
+            )
+            row.append(val)
+        output.append(row)
+    return output
+
+def pool(image: List[List[float]], size: int = 2, stride: int = 2) -> List[List[float]]:
+    """Max pooling 2x2."""
+    h, w = len(image), len(image[0])
+    pooled = []
+    for i in range(0, h, stride):
+        row = []
+        for j in range(0, w, stride):
+            patch = [
+                image[i + di][j + dj]
+                for di in range(size) for dj in range(size)
+            ]
+            row.append(max(patch))
+        pooled.append(row)
+    return pooled
+
+class SimpleCNN:
+    """
+    Простая конволюционная нейросеть (CNN) с одним фильтром и полносвязным слоем.
+    """
+    def __init__(self, num_classes: int = 10, learning_rate: float = 0.01):
+        self.num_classes = num_classes
+        self.learning_rate = learning_rate
+
+        # Инициализация фильтра (ядро свёртки) 3x3
+        self.kernel = [
+            [random.uniform(-0.5, 0.5) for _ in range(3)] for _ in range(3)
+        ]
+
+        # Полносвязный слой: (6x6) -> 10 (6x6 — размер после пулинга)
+        self.fc_weights = [
+            [random.uniform(-0.5, 0.5) for _ in range(36)] for _ in range(num_classes)
+        ]
+        self.fc_bias = [random.uniform(-0.5, 0.5) for _ in range(num_classes)]
+
+    def forward(self, image: List[List[float]]) -> Tuple[List[List[float]], List[float]]:
+        """Прямое распространение."""
+        conv_out = convolve(image, self.kernel)
+        relu_out = [[relu(c) for c in row] for row in conv_out]
+        pooled = pool(relu_out)
+
+        # Выравнивание
+        flattened = [item for sublist in pooled for item in sublist]
+
+        # Полносвязный слой
+        logits = [
+            sum(flattened[j] * self.fc_weights[i][j] for j in range(len(flattened))) + self.fc_bias[i]
+            for i in range(self.num_classes)
+        ]
+
+        self.last_flattened = flattened
+        self.last_logits = logits
+        return softmax(logits)
+
+    def backward(self, image: List[List[float]], target_probs: List[float]) -> None:
+        """Обратное распространение ошибки."""
+        logits = self.last_logits
+        probs = softmax(logits)
+        logit_grads = [probs[i] - target_probs[i] for i in range(self.num_classes)]
+
+        # Градиенты FC
+        fc_weight_grads = [
+            [logit_grads[i] * self.last_flattened[j] for j in range(len(self.last_flattened))]
+            for i in range(self.num_classes)
+        ]
+        fc_bias_grads = logit_grads[:]
+
+        # Обновляем веса FC
+        for i in range(self.num_classes):
+            for j in range(len(self.last_flattened)):
+                self.fc_weights[i][j] -= self.learning_rate * fc_weight_grads[i][j]
+            self.fc_bias[i] -= self.learning_rate * fc_bias_grads[i]
+
+    def train_batch(self, X: List[List[List[float]]], Y_onehot: List[List[int]], epochs: int = 50) -> None:
+        """Обучение на батче."""
+        for epoch in range(epochs):
+            total_loss = 0.0
+            for img, target in zip(X, Y_onehot):
+                probs = self.forward(img)
+                loss = -sum(t * math.log(p + 1e-9) for t, p in zip(target, probs))
+                total_loss += loss
+                self.backward(img, target)
+            if epoch % 10 == 0:
+                print(f"Epoch {epoch}, Loss: {total_loss:.4f}")
+
+    def predict(self, image: List[List[float]]) -> int:
+        """Предсказание класса."""
+        probs = self.forward(image)
+        return probs.index(max(probs))
+
+# Вспомогательные функции для работы с данными
+def to_one_hot(labels: List[int], num_classes: int = 10) -> List[List[int]]:
+    return [[1 if i == label else 0 for i in range(num_classes)] for label in labels]
+
+# Пример использования (XOR/цифры)
+if __name__ == "__main__":
+    from sklearn.datasets import load_digits
+    from sklearn.model_selection import train_test_split
+
+    digits = load_digits()
+    X_full = digits.data.reshape(-1, 8, 8).tolist()
+    y_full = digits.target.tolist()
+
+    X_train, X_test, y_train, y_test = train_test_split(X_full, y_full, test_size=0.2, random_state=42)
+
+    y_train_oh = to_one_hot(y_train)
+    y_test_oh = to_one_hot(y_test)
+
+    cnn = SimpleCNN(num_classes=10, learning_rate=0.001)
+    cnn.train_batch(X_train, y_train_oh, epochs=80)
+
+    # Оценка точности
+    correct = sum(cnn.predict(img) == true_label for img, true_label in zip(X_test, y_test))
+    accuracy = correct / len(y_test)
+    print(f"\nTest Accuracy: {accuracy:.2f}")
