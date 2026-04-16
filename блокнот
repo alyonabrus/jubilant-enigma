@@ -1,0 +1,92 @@
+import random
+import numpy as np
+from sklearn.linear_model import Perceptron as SklearnPerceptron
+from typing import List, Union, Literal
+
+def threshold(z: float) -> int:
+    """Пороговая функция активации."""
+    return 1 if z >= 0.5 else 0
+
+class PerceptronPurePython:
+    """Реализация перцептрона на чистом Python."""
+    def __init__(self, learning_rate: float = 0.1):
+        self.learning_rate = learning_rate
+        self.weights: List[float] = []
+        self.bias: float = 0.0
+
+    def _init_weights(self, n_features: int):
+        self.weights = [random.uniform(-0.5, 0.5) for _ in range(n_features)]
+        self.bias = random.uniform(-0.5, 0.5)
+
+    def fit(self, X: List[List[float]], y: List[int], epochs: int = 10):
+        n_features = len(X[0])
+        self._init_weights(n_features)
+        for _ in range(epochs):
+            for x_i, target in zip(X, y):
+                linear_output = sum(w * xi for w, xi in zip(self.weights, x_i)) + self.bias
+                prediction = threshold(linear_output)
+                update = self.learning_rate * (target - prediction)
+                self.weights = [w + update * xi for w, xi in zip(self.weights, x_i)]
+                self.bias += update
+
+    def predict(self, X: List[List[float]]) -> List[int]:
+        return [
+            threshold(sum(w * xi for w, xi in zip(self.weights, x_i)) + self.bias)
+            for x_i in X
+        ]
+
+class PerceptronNumpy:
+    """Реализация перцептрона с использованием NumPy."""
+    def __init__(self, learning_rate: float = 0.1):
+        self.learning_rate = learning_rate
+        self.weights: np.ndarray = np.array([])
+        self.bias: float = 0.0
+
+    def _init_weights(self, n_features: int):
+        self.weights = np.random.uniform(-0.5, 0.5, size=n_features)
+        self.bias = np.random.uniform(-0.5, 0.5)
+
+    def fit(self, X: np.ndarray, y: np.ndarray, epochs: int = 10):
+        n_samples, n_features = X.shape
+        self._init_weights(n_features)
+        for _ in range(epochs):
+            for x_i, target in zip(X, y):
+                linear_output = np.dot(x_i, self.weights) + self.bias
+                prediction = int(linear_output >= 0)
+                update = self.learning_rate * (target - prediction)
+                self.weights += update * x_i
+                self.bias += update
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        linear_output = np.dot(X, self.weights) + self.bias
+        return (linear_output >= 0).astype(int)
+
+# Пример использования
+if __name__ == "__main__":
+    X_or = [[1, 1], [1, 0], [0, 1], [0, 0]]
+    y_or = [1, 1, 1, 0]
+
+    # Чистый Python
+    model_py = PerceptronPurePython()
+    model_py.fit(X_or, y_or)
+    print("Python — OR:")
+    for x, y_true in zip(X_or, y_or):
+        print(f"Вход: {x}, Истинное: {y_true}, Предсказанное: {model_py.predict([x])[0]}")
+
+    # NumPy
+    X_and_np = np.array([[1, 1], [1, 0], [0, 1], [0, 0]], dtype=float)
+    y_and_np = np.array([1, 0, 0, 0])
+    model_np = PerceptronNumpy()
+    model_np.fit(X_and_np, y_and_np)
+    print("\nNumPy — AND:")
+    predictions_np = model_np.predict(X_and_np)
+    for x, y_true, y_pred in zip(X_and_np, y_and_np, predictions_np):
+        print(f"Вход: {x}, Истинное: {y_true}, Предсказанное: {y_pred}")
+
+    # Scikit-learn
+    model_sk = SklearnPerceptron(max_iter=10, eta0=0.1, random_state=42)
+    model_sk.fit(X_and_np, y_and_np)
+    print("\nScikit-learn — AND:")
+    predictions_sk = model_sk.predict(X_and_np)
+    for x, y_true, y_pred in zip(X_and_np, y_and_np, predictions_sk):
+        print(f"Вход: {x}, Истинное: {y_true}, Предсказанное: {y_pred}")
