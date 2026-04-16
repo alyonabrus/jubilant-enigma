@@ -1,0 +1,211 @@
+import random
+import math
+import numpy as np
+from typing import List, Dict, Tuple
+
+def softmax(logits: np.ndarray) -> np.ndarray:
+    """Стабильный softmax с использованием NumPy."""
+    logits = logits - np.max(logits)
+    exps = np.exp(logits)
+    return exps / np.sum(exps)
+
+def tanh(x: float) -> float:
+    """Гиперболический тангенс."""
+    return math.tanh(x)
+
+def tanh_derivative(x: float) -> float:
+    """Производная гиперболического тангенса."""
+    t = tanh(x)
+    return 1 - t * t
+
+class SimpleRNN:
+    """
+    Простая рекуррентная нейросеть (RNN) с поддержкой нескольких скрытых слоёв.
+
+    Args:
+        vocab_size: Размер словаря (количество уникальных символов).
+        hidden_size: Размер скрытого слоя.
+        num_layers: Количество скрытых слоёв (по умолчанию 1).
+        learning_rate: Скорость обучения.
+    """
+    def __init__(self, vocab_size: int, hidden_size: int, num_layers: int = 1, learning_rate: float = 0.01):
+        self.vocab_size = vocab_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.learning_rate = learning_rate
+
+        # Инициализация весов и смещений для каждого слоя
+        self.W_ih = [np.random.uniform(-0.1, 0.1, (hidden_size, vocab_size)) for _ in range(num_layers)]
+        self.W_hh = [np.random.uniform(-0.1, 0.1, (hidden_size, hidden_size)) for _ in range(num_layers)]
+        self.b_h = [np.zeros((hidden_size,)) for _ in range(num_layers)]
+        self.W_ho = np.random.uniform(-0.1, 0.1, (vocab_size, hidden_size))
+        self.b_o = np.zeros((vocab_size,))
+
+        # Состояния скрытых слоёв (для каждого слоя)
+        self.hidden_states = [np.zeros((hidden_size,)) for _ in range(num_layers)]
+
+    def reset_state(self) -> None:
+        """Сброс состояний скрытых слоёв."""
+        self.hidden_states = [np.zeros_like(h) for h in self.hidden_states]
+
+    def forward(self, input_vector: np.ndarray) -> np.ndarray:
+        """Прямое распространение сигнала через все слои."""
+        h_prev = input_vector
+        for l in range(self.num_layers):
+            # h = tanh(W_ih @ x + W_hh @ h_prev + b_h)
+            h_current = np.tanh(
+                self.W_ih[l] @ h_prev + self.W_hh[l] @ self.hidden_states[l] + self.b_h[l]
+            )
+            self.hidden_states[l] = h_current
+            h_prev = h_current
+
+        # output = W_ho @ h + b_o
+        output_logits = self.W_ho @ h_prev + self.b_o
+        return softmax(output_logits)
+
+    def backward(self, input_vector: np.ndarray,
+                 target_vector: np.ndarray,
+                 prev_hidden_states: List[np.ndarray]) -> None:
+        """
+        Обратное распространение ошибки (BPTT).
+        """
+        # Сохраняем текущие состояния для вычисления градиентов
+        current_hidden_states = [h.copy() for h in self.hidden_states]
+
+        # Forward pass для вычисления выхода (нужно для градиента)
+        output_probs = self.forward(input_vector)
+        
+        # Ошибка на выходе (кросс-энтропия + softmax)
+        output_error = output_probs - target_vector
+
+        # Градиенты для выходного слоя
+        grad_W_ho = np.outer(output_error, current_hidden_states[-1])
+        grad_b_o = output_error.copy()
+
+        # Ошибка на последнем скрытом слое
+        hidden_errors = [output_error @ self.W_ho]
+        
+        # Backprop through time (BPTT) по слоям в обратном порядке
+        for l in reversed(range(self.num_layers)):
+            # Ошибка на текущем слое с учётом ошибки от следующего слоя
+            error_from_next = hidden_errors[0] if l == self.num_layers - 1 else hidden_errors[-1]
+            
+            # Производная tanh по активациям текущего слоя
+            tanh_derivs = 1 - current_hidden_states[l] ** 2
+
+            # Градиенты для текущего слоя
+            grad_W_ih = np.outer(tanh_derivs * error_from_next, input_vector if l == 0 else current_hidden_states[l-1])
+            grad_W_hh = np.outer(tanh_derivs * error_from_next, prev_hidden_states[l])
+            grad_b_h = tanh_derivs * error_from_next
+
+            # Ошибка для передачи в предыдущий слой (или на вход)
+            error_to_prev = (self.W_hh[l].T @ (tanh_derivs * error_from_next))
+            if l > 0:
+                hidden_errors.append(error_to_prev)
+            else:
+                # Для первого слоя ошибка уходит на вход (не используется для обновления W_ih[0])
+                pass
+
+            # Обновляем веса и смещения текущего слоя
+            self.W_ih[l] -= self.learning_rate * grad_W_ih
+            self.W_hh[l] -= self.learning_rate * grad_W_hh
+            self.b_h[l] -= self.learning_rate * grad_b_h
+
+        # Обновляем выходной слой
+        self.W_ho -= self.learning_rate * grad_W_ho
+        self.b_o -= self.learning_rate * grad_b_o
+
+    def train(self, text: str, epochs: int = 200) -> Tuple[Dict[str, int], Dict[int, str]]:
+        """Обучение сети на текстовых данных."""
+        unique_chars = sorted(list(set(text)))
+        char_to_idx = {ch: idx for idx, ch in enumerate(unique_chars)}
+        idx_to_char = {idx: ch for ch, idx in char_to_idx.items()}
+        
+        vocab_size = len(unique_chars)
+        
+        for epoch in range(epochs):
+            self.reset_state()
+            total_loss = 0.0
+
+            # Сохраняем состояния перед обновлением для BPTT
+            prev_hidden_states = [h.copy() for h in self.hidden_states]
+            
+            for t in range(len(text) - 1):
+                input_char = text[t]
+                target_char = text[t + 1]
+                
+                input_vec = np.zeros((vocab_size,))
+                input_vec[char_to_idx[input_char]] = 1.0
+
+                target_vec = np.zeros((vocab_size,))
+                target_vec[char_to_idx[target_char]] = 1.0
+
+                output_probs = self.forward(input_vec)
+                loss = -math.log(output_probs[char_to_idx[target_char]] + 1e-9)
+                total_loss += loss
+
+                # Backpropagation через время (BPTT)
+                self.backward(input_vec, target_vec, prev_hidden_states)
+                
+                # Обновляем сохранённые состояния для следующего шага BPTT
+                prev_hidden_states = [h.copy() for h in self.hidden_states]
+            
+            if epoch % 20 == 0:
+                print(f"Epoch {epoch}, Loss: {total_loss:.4f}")
+        
+        return char_to_idx, idx_to_char
+
+    def generate(self, start_char: str,
+                 idx_to_char: Dict[int, str],
+                 length: int = 50) -> str:
+        """Генерация текста по начальному символу."""
+        self.reset_state()
+        current_char_idx = list(idx_to_char.keys())[list(idx_to_char.values()).index(start_char)]
+        
+        generated_indices = [current_char_idx]
+        
+        for _ in range(length):
+            input_vec = np.zeros((self.vocab_size,))
+            input_vec[current_char_idx] = 1.0
+
+            output_probs = self.forward(input_vec)
+            
+            # Сэмплируем следующий символ по вероятностям
+            next_char_idx = np.random.choice(range(self.vocab_size), p=output_probs)
+            
+            generated_indices.append(next_char_idx)
+            current_char_idx = next_char_idx
+
+        return ''.join(idx_to_char[i] for i in generated_indices)
+
+
+# Пример использования с большим текстом и глубокой сетью
+if __name__ == "__main__":
+    # Загрузка большого текста (пример — "Война и мир")
+    try:
+        with open("tolstoy_war_and_peace.txt", "r", encoding="utf-8") as f:
+            text_data = f.read()
+    except FileNotFoundError:
+        print("Файл tolstoy_war_and_peace.txt не найден. Используем пример.")
+        text_data = ("Это пример большого текста для обучения RNN. " * 1000)
+    
+    vocab_size_estimated = len(set(text_data))
+    print(f"Оценка размера словаря: {vocab_size_estimated} символов")
+    
+    rnn_model = SimpleRNN(
+        vocab_size=vocab_size_estimated,
+        hidden_size=64,
+        num_layers=3,
+        learning_rate=0.005
+    )
+    
+    print("Начало обучения...")
+    char_to_idx_map, idx_to_char_map = rnn_model.train(text_data[:50000], epochs=300)
+    
+    print("\nГенерация текста:")
+    generated_text_sample = rnn_model.generate(
+        start_char=text_data[0],
+        idx_to_char=idx_to_char_map,
+        length=200
+    )
+    print(generated_text_sample)
