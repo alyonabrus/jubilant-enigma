@@ -1,0 +1,116 @@
+
+import random
+import math
+from typing import List, Tuple
+
+def sigmoid(x: float) -> float:
+    """Сигмоидальная функция активации."""
+    return 1 / (1 + math.exp(-x))
+
+def sigmoid_derivative(x: float) -> float:
+    """Производная сигмоидальной функции."""
+    s = sigmoid(x)
+    return s * (1 - s)
+
+class MLP_SigmoidBackpropOptimized:
+    """
+    Многослойный перцептрон (MLP) с одним скрытым слоем,
+    обучаемый методом обратного распространения ошибки (Backpropagation).
+
+    Реализована задача XOR.
+    """
+    def __init__(self, input_size: int = 2, hidden_size: int = 2, output_size: int = 1, learning_rate: float = 0.5):
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.learning_rate = learning_rate
+
+        # Инициализация весов и смещений случайными числами в диапазоне [-1, 1]
+        self.w1 = [[random.uniform(-1, 1) for _ in range(input_size)] for _ in range(hidden_size)]
+        self.b1 = [random.uniform(-1, 1) for _ in range(hidden_size)]
+
+        self.w2 = [[random.uniform(-1, 1) for _ in range(hidden_size)] for _ in range(output_size)]
+        self.b2 = [random.uniform(-1, 1) for _ in range(output_size)]
+
+    def forward(self, x: List[float]) -> Tuple[List[float], List[float], List[float], List[float]]:
+        """
+        Прямое распространение сигнала.
+
+        Вычисляет выходы скрытого и выходного слоев.
+        """
+        # Скрытый слой
+        z1 = [sum(self.w1[j][i] * x[i] for i in range(self.input_size)) + self.b1[j] for j in range(self.hidden_size)]
+        a1 = [sigmoid(val) for val in z1]
+
+        # Выходной слой
+        z2 = [sum(self.w2[k][j] * a1[j] for j in range(self.hidden_size)) + self.b2[k] for k in range(self.output_size)]
+        a2 = [sigmoid(val) for val in z2]
+
+        return z1, a1, z2, a2
+
+    def backward(
+        self,
+        x: List[float],
+        y_true: List[float],
+        z1: List[float],
+        a1: List[float],
+        a2: List[float]
+    ) -> None:
+        """
+        Обратное распространение ошибки и обновление весов.
+
+        Корректирует веса и смещения на основе ошибки предсказания.
+        """
+        # Ошибка выходного слоя
+        output_errors = [(y_true[k] - a2[k]) * sigmoid_derivative(z2_k) for k, z2_k in enumerate(z2)]
+
+        # Ошибка скрытого слоя
+        hidden_errors = []
+        for j in range(self.hidden_size):
+            error_sum = sum(self.w2[k][j] * output_errors[k] for k in range(self.output_size))
+            hidden_errors.append(error_sum * sigmoid_derivative(z1[j]))
+
+        # Обновление весов и смещений выходного слоя (w2, b2)
+        for k in range(self.output_size):
+            for j in range(self.hidden_size):
+                self.w2[k][j] += self.learning_rate * output_errors[k] * a1[j]
+            self.b2[k] += self.learning_rate * output_errors[k]
+
+        # Обновление весов и смещений скрытого слоя (w1, b1)
+        for j in range(self.hidden_size):
+            for i in range(self.input_size):
+                self.w1[j][i] += self.learning_rate * hidden_errors[j] * x[i]
+            self.b1[j] += self.learning_rate * hidden_errors[j]
+
+    def train(self, X: List[List[float]], Y: List[int], epochs: int = 10000) -> None:
+        """Обучение сети на наборе данных X с целевыми значениями Y."""
+        for epoch in range(epochs):
+            total_loss = 0.0
+            for x, y_scalar in zip(X, Y):
+                y_true = [y_scalar] # Приводим к вектору для согласованности размерностей
+                z1, a1, z2, a2 = self.forward(x)
+                loss = sum((y_true[k] - a2[k])**2 for k in range(self.output_size))
+                total_loss += loss
+                self.backward(x, y_true, z1, a1, a2)
+            
+            if epoch % 1000 == 0:
+                print(f"Epoch {epoch}, Loss: {total_loss:.4f}")
+
+    def predict(self, x: List[float]) -> int:
+        """Предсказание для одного входного вектора."""
+        _, _, _, a2 = self.forward(x)
+        return round(a2[0])
+
+
+# --- Пример использования для задачи XOR ---
+if __name__ == "__main__":
+    X_xor = [[0, 0], [0, 1], [1, 0], [1, 1]]
+    Y_xor = [0, 1, 1, 0]
+
+    mlp = MLP_SigmoidBackpropOptimized()
+    mlp.train(X_xor, Y_xor)
+
+    print("\nMLP (Optimized Sigmoid + Backprop) — XOR:")
+    for x, y_true in zip(X_xor, Y_xor):
+        pred = mlp.predict(x)
+        print(f"Вход: {x}, Истинное: {y_true}, Предсказанное: {pred}")
